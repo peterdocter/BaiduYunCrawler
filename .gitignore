@@ -3,6 +3,8 @@ Thumbs.db
 ehthumbs.db
 *.pyc
 *.~py
+*.json
+*.log
 
 # Folder config file
 Desktop.ini

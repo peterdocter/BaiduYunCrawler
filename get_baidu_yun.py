@@ -16,13 +16,10 @@ import random
 class Error(Exception):
     pass
 
-MONGODB = pymongo.MongoClient('127.0.0.1', 27017)
-MONGODB_FANS = MONGODB.baidu.yun
-MONGODB_SHARE = MONGODB.baidu.share
 
 ALL_ERROR = Exception
 
-HTTP_ERROR_MAX = 50
+HTTP_ERROR_MAX = 10
 HTTP_TIME_OUT = 30
 USER_AGENT = (
     'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -178,8 +175,6 @@ def do_uk_fans(uk_in, num):
     _LOG('done:%d(%d) <duplicate key:%d(%d)>' % (uk_in, num, error, fans_len))
 
 
-
-
 def get_share(uk_in):
     ret_func = lambda data, headers: json.loads(data)
     isok_func = lambda ret: isinstance(ret, dict) and 'list' in ret and ret.get('errno', -1)==0
@@ -238,17 +233,54 @@ def do_share(p, spawn_num, min_count):
 
 
 def do_follow(p, spawn_num, min_count):
-    ret_iter = MONGODB_FANS.find({'follow_flag':None, 'follow_count':{'$gt':min_count}})
+    ret_iter = MONGODB_FANS.find({'follow_flag':None, 'follow_count':{'$gt':min_count}}, {'uk':1, 'follow_count':1})
     for ret in ret_iter:
         if spawn_num<=1:
             do_uk_follow(ret['uk'], ret['follow_count'])
         else:
             p.spawn(do_uk_follow, ret['uk'], ret['follow_count'])
 
+def get_info(uk_in):
+    """{"errno":0,"request_id":2093762667,"user_info":
+        {"uname":"\u533f\u540d","intro":"","avatar_url":"http:\/\/himg.bdimg.com\/sys\/portrait\/item\/44c5e9af.jpg",
+        "follow_count":0,"fans_count":0,"uk":29086124598,"album_count":0,"pubshare_count":0,"tui_user_count":0,
+        "c2c_user_sell_count":0,"c2c_user_buy_count":0,"c2c_user_product_count":0,"pair_follow_type":-1}}"""
+    url = r'http://yun.baidu.com/pcloud/user/getinfo?query_uk=%d&clienttype=0&web=1' % (uk_in, )
+    ret_func = lambda data, headers: json.loads(data)
+    isok_func = lambda ret: isinstance(ret, dict) and 'user_info' in ret and ret.get('errno', -1)==0
+    ret = get_data(uk_in, url, ret_func=ret_func, isok_func=isok_func)
+    u = ret.get('user_info', None)
+    if u:
+        uk_info = {'_id':uk_in,
+               'ava':u.get("avatar_url", ''),
+               'fan':u.get("fans_count", 0),
+               'flw':u.get("follow_count", 0),
+               'intro':u.get("intro", ''),
+               'uname':u.get("uname", ''),
+               'psc':u.get("pubshare_count", 0)}
+        try:
+            MONGODB_INFO.insert_one(uk_info)
+            _LOG('get_info :%d (%d) <%d>' % (uk_in, uk_info['fan'], uk_info['flw']))
+        except pymongo.errors.PyMongoError as ex:
+            _LOG('get_info MONGODB_FANS.insert_one:%d -> %s' % (uk_in, ex) )
+
+def do_info(p, spawn_num, uk):
+    ret= MONGODB_FANS.find_one({'uk':uk}, {'_id':1})
+    if not ret:
+        if spawn_num<=1:
+            get_info(uk)
+        else:
+            p.spawn(get_info, uk)
+
+
+MONGODB = pymongo.MongoClient('127.0.0.1', 27017)
+MONGODB_FANS = MONGODB.baidu.yun
+MONGODB_SHARE = MONGODB.baidu.share
+MONGODB_INFO = MONGODB.baidu.info
 
 def main():
     log_file = None
-    USE_LOG_FILE = False
+    USE_LOG_FILE = True
     if USE_LOG_FILE:
         log_file = open(os.path.join(os.getcwd(), "%s_%d.log"%(__file__, os.getpid())), 'w')
         _LOG.log_file = log_file
@@ -258,19 +290,30 @@ def main():
     proxy_list = getattr(get_proxy_info, 'proxy_list', [])
     _LOG('proxy ip:%d' % (len(proxy_list),))
 
-    spawn_num = 50
-    min_count = 10
+    def my_xrange(start, end):
+        index = start
+        while index < end:
+            yield index
+            index += 1
+
+    spawn_num = 100
+    max_uk = 4288057340L
     try:
-        while 1:
-            try:
-                p = Pool(spawn_num)
-                do_follow(p, spawn_num, min_count)
-                #do_fans(p, spawn_num, min_count)
-                #do_share(p, spawn_num, min_count)
-            except pymongo.errors.PyMongoError as ex:
-                _LOG('pymongo.errors.PyMongoError:%s' % (ex,))
-            finally:
-                p.join()
+        p = Pool(spawn_num)
+        for uk in my_xrange(734700, max_uk):
+            do_info(p, spawn_num, uk)
+    except ALL_ERROR as ex:
+        raise ex
+##        while 1:
+##            try:
+##
+##                info(p, spawn_num, min_count)
+##                #do_fans(p, spawn_num, min_count)
+##                #do_share(p, spawn_num, min_count)
+##            except pymongo.errors.PyMongoError as ex:
+##                _LOG('pymongo.errors.PyMongoError:%s' % (ex,))
+##            finally:
+##                p.join()
     finally:
         MONGODB.close()
         _LOG('main end.')
@@ -293,4 +336,18 @@ def _LOG(msg_in, time_now=True, new_line=True):
 if __name__ == '__main__':
     main()
 
+"""
+use baidu
+db.yun.ensureIndex({"topic":1})
+db.yun.getIndexes()
+db.share.getIndexes()
+db.yun.find({'uk':0})
+db.yun.find({'uk':2})
+db.yun.find({}, {'uk':1,'_id':0}).sort({"uk" : 1}).limit(1)
 
+db.info.ensureIndex({"uname":1})
+db.info.ensureIndex({"psc":-1})
+db.info.ensureIndex({"flw":-1})
+db.info.ensureIndex({"fan":-1})
+
+"""

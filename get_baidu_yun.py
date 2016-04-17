@@ -300,7 +300,7 @@ def main():
     max_uk = 4288057340L
     try:
         p = Pool(spawn_num)
-        for uk in my_xrange(781500, max_uk):
+        for uk in my_xrange(2882600, max_uk):
             do_info(p, spawn_num, uk)
     except ALL_ERROR as ex:
         raise ex
